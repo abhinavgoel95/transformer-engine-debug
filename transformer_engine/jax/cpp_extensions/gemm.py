@@ -1,7 +1,3 @@
-# Copyright (c) 2022-2024, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-#
-# See LICENSE for license information.
-"""JAX/TE custom ops for cuBlasLt GEMM"""
 import warnings
 import operator
 from functools import reduce
@@ -99,7 +95,7 @@ class CollectiveGemmPrimitive(BasePrimitive):
 
         # Validate operand layouts
         lhs_inner_dim, rhs_inner_dim = map(
-            lambda inner_dim, ndims: (ndims - inner_dim) if inner_dim < 0 else inner_dim,
+            lambda inner_dim, ndims: (ndims + inner_dim) if inner_dim < 0 else inner_dim,
             contracting_dims,
             (lhs_aval.ndim, rhs_aval.ndim),
         )
@@ -134,7 +130,7 @@ class CollectiveGemmPrimitive(BasePrimitive):
             out_amax_updated_dtype = jnp.float32
             out_scale_updated_dtype = jnp.float32
 
-        # Infer output shape
+        """# Infer output shape
         lhs_outer_dim = lhs_aval.ndim - 1 if lhs_trans else lhs_aval.ndim - 2
         lhs_bdims = [
             dim for dim in range(lhs_aval.ndim) if dim not in [lhs_outer_dim, lhs_inner_dim]
@@ -150,7 +146,32 @@ class CollectiveGemmPrimitive(BasePrimitive):
             lhs_batch_size == rhs_batch_size
         ), "LHS and RHS operands must have the same batched sizes."
         out_shape = (*lhs_batch_shape, lhs_aval.shape[lhs_outer_dim], rhs_aval.shape[rhs_outer_dim])
+        """
 
+        # Make sure leading dimensions of RHS is broadcast-compatible with LHS
+        lhs_outer_dim = lhs_aval.ndim - 1 if lhs_trans else lhs_aval.ndim - 2
+        lhs_bdims = [
+            dim for dim in range(lhs_aval.ndim) if dim not in [lhs_outer_dim, lhs_inner_dim]
+        ]
+        lhs_batch_shape = [lhs_aval.shape[dim] for dim in lhs_bdims]
+        lhs_batch_size = reduce(operator.mul, lhs_batch_shape, 1)
+        rhs_outer_dim = rhs_aval.ndim - 2 if rhs_trans else rhs_aval.ndim - 1
+        if rhs_aval.ndim > 2:
+            rhs_bdims = [
+                dim for dim in range(rhs_aval.ndim) if dim not in [rhs_outer_dim, rhs_inner_dim]
+            ]
+            rhs_batch_shape = [rhs_aval.shape[dim] for dim in rhs_bdims]
+            rhs_batch_size = reduce(operator.mul, rhs_batch_shape, 1)
+            if rhs_batch_size > 1:
+                assert (
+                    lhs_batch_size == rhs_batch_size
+                ), (
+                    f"Leading dimensins of RHS ({rhs_batch_shape=}) is not broadcast-compatible "
+                    + f"with the leading dimensions of LHS ({lhs_batch_shape=})."
+                )
+
+        # Infer output shape
+        out_shape = (*lhs_batch_shape, lhs_aval.shape[lhs_outer_dim], rhs_aval.shape[rhs_outer_dim])
         # Validate bias/bias_grad shape against inferred output
         bias_dtype = jnp.bfloat16 if jax_dtype_is_fp8(out_dtype) else out_dtype
         if fuse_bias:
@@ -382,7 +403,7 @@ class CollectiveGemmPrimitive(BasePrimitive):
         rhs_trans = contracting_dims[1] == rhs.ndim - 1
         lhs = jnp.matrix_transpose(lhs) if lhs_trans and jax_dtype_is_fp8(lhs.dtype) else lhs
         rhs = jnp.matrix_transpose(rhs) if not rhs_trans and jax_dtype_is_fp8(rhs.dtype) else rhs
-        contracting_dims = (1, 1)
+        #contracting_dims = (1, 1)
 
         return CollectiveGemmPrimitive.outer_primitive.bind(
             lhs,
@@ -416,7 +437,7 @@ class CollectiveGemmPrimitive(BasePrimitive):
         lhs_spec, rhs_spec = map(get_padded_spec, [lhs, rhs])
 
         lhs_inner_dim, rhs_inner_dim = map(
-            lambda inner_dim, ndims: (ndims - inner_dim) if inner_dim < 0 else inner_dim,
+            lambda inner_dim, ndims: (ndims + inner_dim) if inner_dim < 0 else inner_dim,
             contracting_dims,
             (lhs.ndim, rhs.ndim),
         )
@@ -472,7 +493,7 @@ class CollectiveGemmPrimitive(BasePrimitive):
         lhs_spec, rhs_spec = map(get_padded_spec, [lhs, rhs])
 
         lhs_inner_dim, rhs_inner_dim = map(
-            lambda inner_dim, ndims: (ndims - inner_dim) if inner_dim < 0 else inner_dim,
+            lambda inner_dim, ndims: (ndims + inner_dim) if inner_dim < 0 else inner_dim,
             contracting_dims,
             (lhs.ndim, rhs.ndim),
         )
